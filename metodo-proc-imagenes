@@ -1,0 +1,793 @@
+
+!pip uninstall -y scikit-image
+!pip install scikit-image==0.15.0
+
+import numpy as np
+from matplotlib import pyplot as plt
+import matplotlib.image as mpimg
+from skimage import io,exposure, img_as_float, filters, feature, img_as_ubyte, morphology
+import scipy 
+import cv2
+import skimage
+from google.colab import files
+
+
+def plot_img_and_hist(image, axes, bins=256):
+    """Plot an image along with its histogram and cumulative histogram.
+
+    """
+    image = img_as_float(image)
+    ax_img, ax_hist = axes
+    ax_cdf = ax_hist.twinx()
+
+    # Display image
+    ax_img.imshow(image, cmap=plt.cm.gray)
+    ax_img.set_axis_off()
+
+    # Display histogram
+    ax_hist.hist(image.ravel(), bins=bins, histtype='step', color='black')
+    ax_hist.ticklabel_format(axis='y', style='scientific', scilimits=(0, 0))
+    ax_hist.set_xlabel('Pixel intensity')
+    ax_hist.set_xlim(0, 1)
+    ax_hist.set_yticks([])
+
+    # Display cumulative distribution
+    img_cdf, bins = exposure.cumulative_distribution(image, bins)
+    ax_cdf.plot(bins, img_cdf, 'r')
+    ax_cdf.set_yticks([])
+
+    return ax_img, ax_hist, ax_cdf
+
+
+def upload_files():
+  from google.colab import files
+  uploaded = files.upload()
+  for k, v in uploaded.items():
+     open(k, 'wb').write(v)
+  return list(uploaded.keys())
+
+def rgb2ycbcr(im):
+    xform = np.array([[.299, .587, .114], [-.1687, -.3313, .5], [.5, -.4187, -.0813]])
+    ycbcr = im.dot(xform.T)
+    ycbcr[:,:,[1,2]] += 128
+    return np.uint8(ycbcr)
+
+def ycbcr2rgb(im):
+    xform = np.array([[1, 0, 1.402], [1, -0.34414, -.71414], [1, 1.772, 0]])
+    rgb = im.astype(np.float)
+    rgb[:,:,[1,2]] -= 128
+    rgb = rgb.dot(xform.T)
+    np.putmask(rgb, rgb > 255, 255)
+    np.putmask(rgb, rgb < 0, 0)
+    return np.uint8(rgb)
+  
+def rgb2gray(img):
+    return np.dot(rgb[...,:3], [0.299, 0.587, 0.144])
+    
+    
+#Levanto imágenes
+
+images_up = upload_files()
+
+images = {}
+original = {}
+criterio_clasificacion ={}
+for i,item in enumerate(images_up):
+  original['test'+str(i+1)] = plt.imread(images_up[i])
+  images['test'+ str(i+1)] = plt.imread(images_up[i])
+  criterio_clasificacion['test'+ str(i+1)] = [0,0,0]
+  
+for i,img in enumerate(images):
+  f, ax  = plt.subplots(1,1, figsize = (8,8), sharex = True, sharey = True)
+  ax.imshow(images['test'+ str(i+1)])
+  ax.set_title('Test'+ str(i+1))
+  ax.axis('off')
+  
+#Detección y filtrado de pelos
+
+
+#%% Detección de pelos y filtrado
+coordenadas = dict.fromkeys(images.keys(), '')
+pelos = dict.fromkeys(images.keys(), '')
+strel = cv2.getStructuringElement(cv2.MORPH_RECT, (15,15))
+for i, item in enumerate(images):
+  b = images[item].copy()
+  b[:,:,1] = 0
+  b[:,:,2] = 0 
+
+  g = images[item].copy()
+  g[:,:,0] = 0
+  g[:,:,2] = 0
+
+  r = images[item].copy()
+  r[:,:,0] = 0
+  r[:,:,1] = 0
+
+  close_r = cv2.morphologyEx(r, cv2.MORPH_CLOSE, strel)
+  close_b = cv2.morphologyEx(b, cv2.MORPH_CLOSE, strel)
+  close_g = cv2.morphologyEx(g, cv2.MORPH_CLOSE, strel)    
+    
+  output = close_r + close_b + close_g
+  temp = rgb2ycbcr(output)
+  close = cv2.morphologyEx(temp, cv2.MORPH_CLOSE, strel)
+  
+  image_Wienner = img_as_ubyte(scipy.signal.wiener(abs(temp[:,:,0]/np.max(temp[:,:,0])-0.000001), mysize = 3))
+    
+  edges = cv2.Canny(image_Wienner, 50, 70)
+    
+  #Morfología matemática
+  strel_1 = cv2.getStructuringElement(cv2.MORPH_RECT, (12,12))
+  edges_mod = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, strel_1)
+  pelos['test'+str(i+1)] = edges_mod
+  fig, (ax0, ax1, ax2) = plt.subplots(1,3, figsize = (10,10),sharex = True, sharey = True)
+  ax0.axis('off')
+  ax1.axis('off')
+  ax2.axis('off')
+  ax0.imshow(images[item][:,:,0],cmap = 'gray')
+  ax1.imshow(edges, cmap = 'gray')
+  ax2.imshow(edges_mod, cmap = 'gray')
+    
+  indices = np.where(edges_mod != [0])
+  coordinates = list(zip(indices[0], indices[1]))
+  coordenadas['test'+ str(i+1)] = coordinates
+
+#Eliminacion de pelos
+import copy
+pelos = {k:skimage.img_as_float(v) for k,v in pelos.items()}
+output = copy.deepcopy(images)
+size = 20
+
+for j,item in enumerate(images):
+  intensidad = rgb2ycbcr(images[item])
+  intensidad = intensidad[:,:,0]
+  resta = intensidad - intensidad*pelos[item]
+  lim_x = np.shape(images[item])[0]
+  lim_y = np.shape(images[item])[1]
+  for i in coordenadas[item]:
+    x = i[0]
+    y = i[1]
+    if x <= size or x >= lim_x-size or y <= size or y>= lim_y-size:
+      pass
+    else:
+      temp = resta[x-size-1:x+size-1, y-size-1:y+size-1]
+      media = np.mean(temp[temp !=0])
+      resta[x,y] = media
+  
+  output[item][:,:,0] = resta
+  output[item] = ycbcr2rgb(output[item])
+    
+  fig, (ax0,ax1,ax2,ax3) = plt.subplots(1,4, figsize = (10,10), sharex = True, sharey = True)
+  ax0.axis('off')
+  ax1.axis('off')
+  ax2.axis('off')
+  ax3.axis('off')
+  ax0.imshow(images['test'+str(j+1)])
+  ax1.imshow(pelos['test'+str(j+1)], cmap = 'gray')
+  ax2.imshow(resta, cmap = 'gray')
+  ax3.imshow(output[item])  
+ 
+ 
+# Image Equalization
+for i, item in enumerate(output):
+  image_equalization = cv2.equalizeHist(output[item][:,:,0])
+  output[item][:,:,0] = image_equalization
+  fig,(ax0,ax1) = plt.subplots(1,2, figsize = (10,10))
+  ax0.axis('off')
+  ax1.axis('off')
+  ax0.imshow(images[item])
+  ax1.imshow(output[item])
+  
+# OTSU
+segmentado_dict = dict()
+for i,item in enumerate(output):
+  gray_normal = cv2.cvtColor(ycbcr2rgb(images[item]),cv2.COLOR_BGR2GRAY)
+  ret_normal, thresh_normal = cv2.threshold(gray_normal,0,255,cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+  gray_eq = cv2.cvtColor(ycbcr2rgb(output[item]),cv2.COLOR_BGR2GRAY)
+  ret_eq, thresh_eq = cv2.threshold(gray_eq,0,255,cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+  
+  segmentado_normal = copy.deepcopy(images[item])
+  [idx,idy] = np.where(thresh_normal == False)
+  segmentado_normal[idx,idy,0] = 0
+  segmentado_dict[item] = segmentado_normal
+  segmentado_eq = copy.deepcopy(output[item])
+  [idx,idy] = np.where(thresh_eq == False)
+  segmentado_eq[idx,idy,0] = 0
+  
+  
+  fig, (ax0,ax1,ax2,ax3,ax4,ax5) = plt.subplots(1,6,figsize = (15,15), sharex = True, sharey = True)
+  ax0.axis('off')
+  ax1.axis('off')
+  ax2.axis('off')
+  ax3.axis('off')
+  ax4.axis('off')
+  ax5.axis('off')
+  ax0.imshow(ycbcr2rgb(images[item]))
+  ax1.imshow(thresh_normal, cmap='gray')
+  ax2.imshow(ycbcr2rgb(segmentado_normal))
+  ax3.imshow(ycbcr2rgb(output[item]))
+  ax4.imshow(thresh_eq, cmap = 'gray')
+  ax5.imshow(ycbcr2rgb(segmentado_eq))
+
+#K-means segmentacion
+
+images_segmentado = {}
+for i, item in enumerate(images):
+  img = ycbcr2rgb(images[item])
+  Z = img.reshape((-1,3))
+
+  # convert to np.float32
+  Z = np.float32(Z)
+
+  # define criteria, number of clusters(K) and apply kmeans()
+  criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+  K = 2
+  ret,label,center=cv2.kmeans(Z,K,None,criteria,10,cv2.KMEANS_RANDOM_CENTERS)
+
+  # Now convert back into uint8, and make original image
+  center = np.uint8(center)
+  res = center[label.flatten()]
+  res2 = res.reshape((img.shape))
+  images_segmentado[item] = rgb2ycbcr(res2)
+  
+  f,(ax0,ax1) = plt.subplots(1,2,figsize=(10,10))
+  
+  ax0.axis('off')
+  ax1.axis('off')
+  ax0.imshow(res2)
+  ax1.imshow(ycbcr2rgb(images[item]))
+  
+#Mejoras de la segmentación y segementación de la lesión
+onlyMole = {}
+color_seg = {}
+original_ycbcr = {}
+mole = {}
+onlyMole_rgb = {}
+
+for i,item in enumerate(images_segmentado):
+  imagen_temp = rgb2ycbcr(original[item])
+  temp = np.invert(images_segmentado[item][:,:,0])
+  temp = np.where(temp == np.min(temp),0,temp)
+  temp = np.where(temp == np.max(temp),1, temp)
+  mama = np.zeros((imagen_temp.shape[0],imagen_temp.shape[1],3))
+  #morfología matemática
+  kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(30,30))
+  temp = cv2.morphologyEx(temp, cv2.MORPH_CLOSE, kernel)
+  temp = cv2.morphologyEx(temp, cv2.MORPH_OPEN, kernel)
+  
+  #Multiplicación con la imagen
+  onlyMole[item] = a
+  onlyMole[item] = temp * rgb2ycbcr(original[item])[:,:,0]
+  a = copy.deepcopy(original[item])
+  a[:,:,0] = temp * a[:,:,0]
+  a[:,:,1] = temp * a[:,:,1]
+  a[:,:,2] = temp * a[:,:,2]
+  onlyMole_rgb[item] = a
+
+  original_ycbcr[item] = original[item]
+  a = temp * original_ycbcr[item][:,:,0]
+
+  
+  mama[:,:,0] = a
+  mama[:,:,1] = imagen_temp[:,:,1]
+  mama[:,:,2] = imagen_temp[:,:,2]
+  mole[item] = ycbcr2rgb(mama)
+  #color_seg[item] = ycbcr2rgb(color_seg[item])
+  
+  # f, (ax0,ax1,ax2,ax3) = plt.subplots(1,4, figsize = (10,10), sharex = True, sharey = True)
+  f, (ax0,ax2,ax3) = plt.subplots(1,3, figsize = (10,10), sharex = True, sharey = True)
+  ax0.axis('off')
+  # ax1.axis('off')
+  ax2.axis('off')
+  ax3.axis('off')
+  ax0.imshow(original[item])
+  # ax1.imshow(images_segmentado[item][:,:,0], cmap = 'gray')
+  ax2.imshow(temp,cmap = 'gray')
+  ax3.imshow(ycbcr2rgb(mama))
+  
+f, (ax0,ax1,ax2) = plt.subplots(1,3, figsize = (10,10), sharex = True, sharey = True)
+ax0.axis('off'); ax2.axis('off'); 
+ax1.axis('off')
+ax0.imshow(original[item])
+ax2.imshow(ycbcr2rgb(mama))
+ax1.imshow(output[item])
+
+plt.imshow(onlyMole_rgb[item])
+plt.axis('off')
+
+#Deteccion velo azul blanquecino
+
+from sklearn.cluster import KMeans
+import matplotlib.pyplot as plt
+import numpy as np
+import cv2
+from collections import Counter
+from skimage.color import rgb2lab, deltaE_cie76
+import os
+
+#the function that gives the hex values of the colors that we will identify
+def RGB2HEX(color):
+    return "#{:02x}{:02x}{:02x}".format(int(color[0]), int(color[1]), int(color[2]))
+    
+def get_colors(imagen, number_of_colors, show_chart):
+    import copy
+    image = copy.deepcopy(imagen)
+    #modified_image = cv2.resize(image, (600, 400), interpolation = cv2.INTER_AREA)
+    modified_image = image.reshape(image.shape[0]*image.shape[1], 3)
+    clf = KMeans(n_clusters = number_of_colors)
+    labels = clf.fit_predict(modified_image)
+
+    counts = Counter(labels)
+
+    center_colors = clf.cluster_centers_
+    
+    # We get ordered colors by iterating through the keys
+    ordered_colors = [center_colors[i]/255 for i in counts.keys()]
+    hex_colors = [RGB2HEX(ordered_colors[i]*255) for i in counts.keys()]
+    rgb_colors = [ordered_colors[i]*255 for i in counts.keys()]
+    
+    if (show_chart):
+        plt.figure(figsize = (8, 6))
+        plt.pie(counts.values(), labels = hex_colors, colors = ordered_colors)
+    
+    return rgb_colors
+    
+COLORS = {
+    'GREEN': [0, 128, 0],
+    'BLUE': [0, 0, 128],
+    'YELLOW': [255, 255, 0]
+}
+
+def match_image_by_color(image, color, threshold, number_of_colors): 
+    
+    image_colors = get_colors(image, number_of_colors,False) #True si quiero plotear los pie charts
+    selected_color = rgb2lab(np.uint8(np.asarray([[color]])))
+
+    select_image = False
+    
+    for i in range(number_of_colors):
+        
+        curr_color = rgb2lab(np.uint8(np.asarray([[image_colors[i]]])))
+        diff = deltaE_cie76(selected_color, curr_color)
+        if (diff < threshold):
+            select_image = True
+    
+    return select_image
+    
+def show_selected_images(images, color, threshold, colors_to_match):
+    index = 0
+    for i,item in enumerate(images):
+        selected = match_image_by_color(images[item],
+                                        color,
+                                        threshold,
+                                        colors_to_match)
+        if (selected):
+            criterio_clasificacion[item][0] = 1
+            a[i] = 1
+            # plt.subplot(3, 11, index)
+            # plt.imshow(images[item])
+            index += 1
+# threshold = [80,0]
+threshold = [82,83]
+# threshold = [80,81,82,83,84,85,86]
+
+for i in threshold:
+  a = np.zeros(len(criterio_clasificacion))
+  # plt.figure(figsize = (20, 10))
+  show_selected_images(mole, COLORS['BLUE'], i, 5)
+  np.savetxt("temp" + str(i)+".txt", a, fmt="%s")
+  
+  
+#Asimetria
+
+import pandas as pd
+import itertools
+threshold = [20,60,61,62,63,64,65,66,67,68,69,70,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100]
+for contador,index  in enumerate(threshold):
+  for counter,item in enumerate(onlyMole_rgb):
+  
+    flag_asimmetry = np.zeros(124)
+    temp_gray = onlyMole[item]
+    temp = onlyMole_rgb[item]
+    # Corto imagen a los rangos de la lesión
+    indices = np.where(temp != [0])
+    xMin = min(indices[0]); xMax = max(indices[0])
+    yMin = min(indices[1]); yMax = max(indices[1])
+    lenX = xMax-xMin; lenY = yMax-yMin
+  
+    patch = temp[xMin:xMax, yMin:yMax]
+    patch_gray = temp_gray[xMin:xMax, yMin:yMax]
+    n = int(round(lenX/20))
+    m = int(round(lenY/20))
+
+    pasoX = int(round(lenX/n)); pasoY = int(round(lenY/m))
+    # df = pd.DataFrame(columns = ['R_min', 'R_mean', 'R_max', 'G_min','G_mean',
+                              # 'G_max','B_min','B_mean','B_max'])
+    df = pd.DataFrame(columns = ['R_mean', 'G_mean', 'B_mean'])
+
+    for i in range(n):
+      for j in range(m):
+      # Mini imágenes que se van desplazando a lo largo de la imagen. La imagen
+      # se divide en una cantidad cuadrada de mini partes para iterar sobre la 
+      # imagen y analizar los puntos encendidos.
+        mini_patch = patch[i*pasoX:(i+1)*pasoX, j*pasoY:(j+1)*pasoY]
+        mini_patch_gray = patch_gray[i*pasoX:(i+1)*pasoX, j*pasoY:(j+1)*pasoY]
+        cond = mini_patch_gray == 0
+        if cond.any():
+          pass
+        R = mini_patch[:,:,0]; G = mini_patch[:,:,1]; B = mini_patch[:,:,2]
+    #       d = {'R_min': np.min(R),'R_mean': np.mean(R), 'R_max': np.max(R), 'G_min': np.min(G), 'G_mean': np.mean(G), 'G_max': np.max(G),
+    #           'B_min': np.min(B), 'B_mean': np.mean(B), 'B_max': np.max(B)}
+    #       df.append(d, ignore_index = False)
+      # arr = [np.min(R), np.mean(R), np.max(R),np.min(G), np.mean(G), np.max(G),
+            # np.min(B), np.mean(B), np.max(B)]
+        arr = [R[np.nonzero(R)].mean(), B[np.nonzero(B)].mean(), G[np.nonzero(G)].mean()]
+        df2 = pd.Series(arr, index = df.columns)
+        df = df.append(df2, ignore_index = True)
+  
+
+    df = df.replace({0:np.nan, 0:np.nan})
+    media = df.mean()
+    desvio = df.std()
+
+    asimetria_red = np.zeros((n,m))
+    asimetria_green = np.zeros((n,m))
+    asimetria_blue = np.zeros((n,m))
+
+    criterio = index
+    contador_red = 0
+    # contador_blue = 0 
+    # contador_green = 0 
+
+    #Criterio de aismetria para el rojo 
+    for i in range(n):
+      for j in range(m):
+        if (n*m == len(df)):
+          pass
+        if df.at[i,'R_mean'] == np.nan:
+          pass
+        if abs(df.at[contador_red,'R_mean']-media['R_mean']) > criterio:
+          asimetria_red[i,j] = 1
+        contador_red += 1 
+      
+  
+    #Divido la imagen en 4 partes para analizar si es que hay asimetria
+    l = 2 #Divisiones para estudio de asimetria
+    pasoX = int(round(n/l)); pasoY = int(round(n/l))
+    contador_red = []
+    for i in range(l):
+      for j in range(l):
+        patch = asimetria_red[i*pasoX:(i+1)*pasoX, j*pasoY:(j+1)*pasoY]  
+        contador_red.append(np.sum(patch))
+  
+    #Criterio de clasificacion
+    media_rojos = np.mean(contador_red)
+    criteria  = contador_red > media_rojos+5
+    if (np.any(criteria)):
+      # print('Esta imagen ' + item + 'presenta asimetría de color?: '+ str(np.any(criteria)))
+      criterio_clasificacion[item][1] = 1
+      flag_asimmetry[counter] = 1
+    elif (not np.all(contador_red) and contador_red != [0,0,0,0]):
+      # print('Esta imagen tiene asimetría de color')
+      criterio_clasificacion[item][1] = 1
+      flag_asimmetry[counter] = 1
+    else:
+      continue  
+
+ 
+  np.savetxt("asimetria" + str(criterio)+".txt", flag_asimmetry, fmt="%s")
+  
+  
+      # print('La imagen ' + item + ' no presenta asimetría')
+
+#Deteccion red atipica
+
+from skimage.filters import sobel
+from skimage import feature
+from skimage.filters import unsharp_mask
+
+matrixPattern = {}
+for i,item in enumerate(onlyMole):
+  temp = onlyMole[item]
+#   temp = cv2.equalizeHist(temp)
+  unsharped = unsharp_mask(temp, radius=1, amount=0.8)
+  
+  LoG = scipy.ndimage.gaussian_laplace(unsharped, 3, mode = 'nearest')
+  thres = 0
+  asdf = scipy.zeros(LoG.shape)
+  w = asdf.shape[1]
+  h = asdf.shape[0]
+  
+
+  for y in range(1, h - 1):
+     for x in range(1, w - 1):
+      patch = LoG[y-1:y+2, x-1:x+2]
+      p = LoG[y, x]
+      maxP = patch.max()
+      minP = patch.min()
+      if (p > 0):
+        zeroCross = True if minP < 0 else False
+      else:
+        zeroCross = True if maxP > 0 else False
+      if ((maxP - minP) > thres) and zeroCross:
+        asdf[y, x] = 1
+  
+  #output = feature.canny(unsharped, sigma=3, low_threshold=0.05, high_threshold=0.11, mask = temp > 0)
+  output = feature.canny(unsharped, sigma=2, low_threshold=0.02, mask = temp > 0)
+  
+  matrixPattern[item] = asdf
+  fig, (ax0,ax1,ax2) = plt.subplots(1,3, figsize = (15,15), sharex = True, sharey =True)
+  ax0.axis('off')
+  ax1.axis('off')
+  ax2.axis('off')
+  #ax2.axis('off')
+  ax3.axis('off')
+  ax0.imshow(temp,cmap = 'gray')
+  ax1.imshow(unsharped,cmap = 'gray')
+  ax2.imshow(asdf,cmap = 'gray')
+#   ax3.imshow(asdf,cmap = 'gray')
+  #ax2.imshow(output, cmap = 'gray')
+  #ax3.imshow(hyst, cmap = 'gray')
+  
+  
+ from sklearn.feature_extraction import image
+coordenadas= {}
+for i, item in enumerate(matrixPattern):
+  temp = np.uint8(matrixPattern[item])
+  kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2,2))
+
+#   temp = cv2.morphologyEx(temp, cv2.MORPH_CLOSE, kernel)
+#   temp = cv2.morphologyEx(temp, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (2,2)))
+  
+#   temp = cv2.morphologyEx(temp, cv2.MORPH_DILATE, cv2.getStructuringElement(cv2.MORPH_RECT, (2,2)))
+#   temp = cv2.morphologyEx(temp, cv2.MORPH_ERODE, cv2.getStructuringElement(cv2.MORPH_RECT, (2,2)))
+#   temp = nd.binary_fill_holes(temp, structure = np.ones((3,3)))
+  
+  indices = np.where(temp != [0])
+  coordinates = list(zip(indices[0], indices[1]))
+  coordenadas[item] = coordinates 
+  matrixPattern[item] = temp
+  
+  
+  fig, (ax0,ax1) = plt.subplots(1,2,figsize = (15,15), sharex = True, sharey = True)
+  ax0.axis('off')
+  ax1.axis('off')
+#   ax2.axis('off')
+  ax0.imshow(original[item], cmap = 'gray')
+  ax1.imshow(temp, cmap = 'gray')
+#   ax2.imshow(temp2, cmap = 'gray')
+
+def DetectorCiclos(imagen, puntosEncendidos):
+  import copy
+  nFilas,nCol = np.shape(imagen)
+  lista = puntosEncendidos
+  output = np.zeros((nFilas, nCol))
+  temp2 = copy.deepcopy(imagen)
+  visitado = [False]*len(puntosEncendidos)
+  axisX = [-1,-1,-1,0,0,1,1,1]
+  axisY = [-1,0,1,-1,1,-1,0,1]
+  a = 0
+
+  while len(lista)!=0:
+    temp = np.zeros((nFilas,nCol))
+    x = lista[0][0] 
+    y = lista[0][1]
+    stack = []
+    ciclos = []
+    contador = 0
+    xInicial = lista[0][0]
+    yInicial = lista[0][1]
+    temp[x,y] = 1
+    lista.pop(0)
+#     print(len(lista))
+    
+    
+    
+    while len(stack) != 0 or contador == 0:
+      contador = contador +1
+#       print(contador)
+      patch = temp2[x-1:x+2, y-1:y+2]
+      indices = np.where(patch !=[0])
+      coordenadas = list(zip(indices[0]-1+x, indices[1]-1+y))
+      for row,col in coordenadas:
+#         print(row,col) 
+        if temp[row,col] == 1:
+          pass
+        elif contador > 7 and (row,col) == (xInicial,yInicial):
+          break
+        elif (row,col) in lista:
+#           print('HOLA')
+          temp2[row,col] = 0 
+          temp[row,col] = 1
+          stack.append((row,col))
+          ciclos.append((row,col))
+          index = lista.index((row,col))
+          lista.pop(index)
+      if len(stack) == 0:
+        break
+      x = stack[0][0]
+      y = stack[0][1]
+      stack.pop(0)
+      stack = list(set(stack))
+      # if len(stack) != 1 or len(stack) != 0:
+        # stack = np.ndarray.tolist(np.unique(np.asarray(stack))) 
+      # stack = np.unique(stack, axis = 0)
+    if len(ciclos) < 2500 and len(ciclos) > 7:
+      a = a +1
+#       print(a)
+      output = output + temp
+    
+  return output
+    
+import time
+start_time = time.time()
+
+output = {}
+for i,item in enumerate(matrixPattern):
+#   %prun DetectorCiclos(matrixPattern[item], coordenadas[item])
+  temp = DetectorCiclos(matrixPattern[item], coordenadas[item])
+  output[item] = temp
+  
+  
+  print("--- %s seconds ---" % (time.time() - start_time))
+  fig, (ax1,ax2) = plt.subplots(1,2,figsize =(15,15))
+  ax1.axis('off'); ax2.axis('off')
+  ax1.imshow(matrixPattern[item], cmap = 'gray')
+  ax2.imshow(temp,cmap = 'gray')
+  
+resultado_red = {}
+from scipy import ndimage as nd
+for i,item in enumerate(output):  
+  bw_img = onlyMole[item]
+  resultado_red[item] = 0 
+#-------------------------------------------------------------------------------
+# Eliminacion de globulos por tamaño
+  
+  kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2,2))      #Elemento estructurante
+  lineas = copy.deepcopy(output[item])
+  bordes = np.zeros((lineas.shape[0], lineas.shape[1]))
+  temp = nd.binary_fill_holes(output[item], structure = np.ones((3,3))) #Relleno los bordes
+  globulos_label, nGlobulos = nd.label(temp)                            #Etiqueto cada uno de los globulos
+  
+  
+  #Calculo tamaño de cada mascara
+  sizes = nd.sum(temp, globulos_label, range(nGlobulos + 1))            #Calculo de los tamanios de los globulos segun cantidad de puntos encendidos
+#   print(sizes)
+  bottom_criteria = sizes < 50                                        #Minima cantidad de puntos que debe tener un globulo para ser considerado uno
+#   print(bottom_criteria)
+  upper_criteria = sizes > 1000                                       #Maxima cantidad de puntos que debe tener un globulo para ser considerado uno
+  
+  remove_pixel_bottom = bottom_criteria[globulos_label]                        #mascara con los puntos a borrar
+  remove_pixel_upper = upper_criteria[globulos_label]
+  
+  globulos_label[remove_pixel_bottom] = 0
+  globulos_label[remove_pixel_upper] = 0
+  RED = copy.deepcopy(globulos_label)
+  
+  
+  labels = np.unique(globulos_label)
+  globulos_label = np.searchsorted(labels, globulos_label)
+  
+  mama = (lineas !=0) & (globulos_label!=0)
+  bordes[mama] = globulos_label[mama]
+  flag = False
+  
+    
+  RED = np.zeros((lineas.shape[0], lineas.shape[1]))
+  
+  contador = 0
+  centroides = np.zeros((lineas.shape[0], lineas.shape[1]))
+  
+  radio = 50
+  criterio = 10
+  centros = []
+  # Calculo centroides de cada area y devuelvo una lista con los centros 
+  for index in range(nGlobulos):
+    contador = contador +1
+    x_bordes,y_bordes = np.where(bordes == contador)
+    if len(x_bordes) == 0 or len(y_bordes)== 0:
+      continue
+
+    
+    x_centroid = int(round(np.mean(x_bordes)))
+    y_centroid = int(round(np.mean(y_bordes)))
+    centroides[x_centroid,y_centroid] = 1
+    centros.append((x_centroid, y_centroid))
+  # print(len(centros))
+    
+  #Veo si hay en la vencidad puntos encendidos   
+  while len(centros)!= 0:
+    stacks = []
+    resultado = []
+    contador = 0
+    flag = False
+    
+    x = centros[0][0]
+    y = centros[0][1]
+    
+    stacks.append((x,y))
+    
+    while len(stacks) != 0 or contador == 0:
+      contador = contador + 1
+      x = stacks[0][0]
+      y = stacks[0][1]
+      
+      if (x,y) not in centros:
+        abc = stacks.index([x,y])
+        stacks.pop(abc)
+        continue
+#       print(contador)
+      
+      centroides[x,y] = 0
+      resultado.append((x,y))
+      
+      #----------------------------------------
+      x0 = x-radio
+      x1 = x+radio
+      y0 = y-radio
+      y1 = y+radio
+      
+      if x0 < 0:
+        x0 = 0
+      if x1> centroides.shape[0]:
+        x1 = centroides.shape[0]
+      if y0 < 0:
+        y0 = 0
+      if y1 > centroides.shape[1]:
+        y1 = centroides.shape[1]
+        
+      patch = centroides[x0:x1, y0:y1]
+      #-----------------------------------------
+      
+      
+      indices = np.where(patch == 1)
+      
+      temp = list(zip(indices[0]+x0, indices[1]+y0))
+
+      stacks.extend(temp[:])
+      stacks = np.ndarray.tolist(np.unique(np.asarray(stacks), axis=0))  
+      abc = centros.index((x,y))
+      centros.pop(abc)
+      stacks.pop(0)
+      
+    if len(resultado) >= criterio:
+      flag = True 
+      for a,b in resultado:
+        RED[a,b] = 1
+      print('Hay red de tamaño: '+ str(len(resultado)))
+      criterio_clasificacion[item][2] = 1
+  
+  
+  if(flag):
+    print('La imagen ' + item + ' presenta red') 
+  else:
+    print('La imagen '+ item + ' NO presenta red')
+
+if(resultado_red[item]==1):
+  print('La imagen '+ item + ' presenta red')
+
+
+
+
+#     media_bordes  = np.mean(bw_img[x_bordes,y_bordes])
+    
+#     x_lesion, y_lesion = np.where(globulos_label == contador)
+#     media_lesion = np.mean(bw_img[x_lesion,y_lesion])
+# #     print(media_lesion)
+    
+#     if media_lesion <   0.99* media_bordes:
+#       RED[x_lesion,y_lesion] = 0
+    
+#-------------------------------------------------------------------------------
+# Eliminacion de globulos por intensidad media
+  
+
+
+#   fig, (ax1,ax2,ax3) = plt.subplots(1,3, figsize = (30,30), sharex = True, sharey = True)
+#   ax1.axis('off'); ax2.axis('off'); ax3.axis('off')
+#   ax1.imshow(original[item])
+#   ax2.imshow(RED)
+#   ax3.imshow(bordes)
+
+#Resultados
+
+criterio_clasificacion
