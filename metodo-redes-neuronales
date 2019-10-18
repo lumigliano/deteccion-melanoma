@@ -1,0 +1,191 @@
+#Data Augmentation
+
+# Run this cell to mount your Google Drive.
+from google.colab import drive
+drive.mount('/content/drive')
+
+import pandas as pd
+
+df = pd.read_csv(file_path,names = ['ID','Label'], encoding='utf-8-sig')
+
+from keras.preprocessing.image import ImageDataGenerator, array_to_img, img_to_array, load_img
+from matplotlib import pyplot as plt
+
+datagen = ImageDataGenerator(
+        rescale=1./255,
+        rotation_range=40,
+        width_shift_range=0.2,
+        height_shift_range=0.2,
+        shear_range=0.2,
+        zoom_range=0.2,
+        fill_mode='nearest',
+        horizontal_flip=True,
+        vertical_flip=True)
+
+folder = path_folder
+
+
+for index, row in df.iterrows():
+    
+    if df.loc[index, 'Label'] == 0:
+      
+      im = df.at[index,'ID']
+      img = plt.imread(folder + 'Benignas/' + im)
+      
+      x = img_to_array(img)  
+      x = x.reshape((1,) + x.shape)  
+
+      i = 0
+
+      for batch in datagen.flow(x, batch_size=1,
+                                save_to_dir=save_dir_benignas, save_prefix = 'ben', save_format='jpeg'):
+          i += 1
+          if i > 4:
+              break  
+    else:
+    
+      im = df.at[index,'ID']
+      img = plt.imread(folder + 'Melanomas/' + im)
+
+      x = img_to_array(img)  
+      x = x.reshape((1,) + x.shape)  
+
+      i = 0
+
+      for batch in datagen.flow(x, batch_size=1,
+                                save_to_dir=save_dir_melanomas, save_prefix = 'mel', save_format='jpeg'):
+          i += 1
+          if i > 4:
+              break  
+              
+              
+#Metodo
+
+import sys
+from os.path import join
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
+
+import tensorflow as tf
+from keras.applications.resnet50 import ResNet50
+from keras.preprocessing import image
+from keras.applications.resnet50 import preprocess_input
+from tensorflow.python.keras.preprocessing.image import load_img, img_to_array
+#from tensorflow.python.keras.applications import ResNet50
+
+from keras import models, regularizers, layers, optimizers, losses, metrics
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.utils import np_utils, to_categorical
+from keras.preprocessing.image import ImageDataGenerator
+from keras.preprocessing import image
+from keras.applications import ResNet50
+from keras.callbacks import ModelCheckpoint
+
+
+from google.colab import drive
+drive.mount('/content/drive')
+
+import pandas as pd
+
+folder = data_folder
+
+conv_base = ResNet50(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
+
+model = models.Sequential()
+model.add(conv_base)
+model.add(layers.Flatten())
+model.add(layers.Dropout(0.5))
+model.add(layers.Dense(64, activation='relu',kernel_regularizer=regularizers.l2(0.001)))
+model.add(layers.Dropout(0.5))
+model.add(layers.Dense(2, activation='sigmoid'))
+
+#Freezo la base convolucional
+
+for layer in conv_base.layers[:]:
+   layer.trainable = False
+   
+# Compilo base freezada + clasificador
+
+model.compile(optimizer=optimizers.Adam(),
+              loss='binary_crossentropy',
+              metrics=['accuracy'])
+              
+
+# Preparo los directorios para el generador
+
+train_dir = train_dir
+validation_dir = val_dir
+test_dir = test_dir
+batch_size = 20
+target_size=(224, 224)
+
+#train_datagen = ImageDataGenerator(rescale=1./255)
+train_datagen = ImageDataGenerator(rescale=1./255,
+                                   rotation_range=40,
+                                   width_shift_range=0.2,
+                                   height_shift_range=0.2,
+                                   shear_range=0.2,
+                                   zoom_range=0.2,
+                                   horizontal_flip=True,
+                                   vertical_flip=True,
+                                   fill_mode='nearest')
+
+test_datagen = ImageDataGenerator(rescale=1./255)
+
+train_generator = train_datagen.flow_from_directory(train_dir,target_size=target_size,batch_size=batch_size)
+validation_generator = test_datagen.flow_from_directory(validation_dir,target_size=target_size,batch_size=batch_size)
+test_generator = test_datagen.flow_from_directory(test_dir,target_size=target_size,batch_size=batch_size)
+
+
+checkpoint = [ModelCheckpoint(filepath='Or_modelo1.hdf5')]
+
+history = model.fit_generator(train_generator,
+                              epochs=10,
+                              callbacks=checkpoint, 
+                              steps_per_epoch = num_train // batch_size,
+                              validation_data = validation_generator,
+                              validation_steps = num_val // batch_size)
+                              
+
+#Desfreezo el ultimo bloque de la capa convolucional
+
+for layer in conv_base.layers[:165]:
+   layer.trainable = False
+for layer in conv_base.layers[165:]:
+   layer.trainable = True
+
+#Compilo modelo
+
+model.compile(optimizer=optimizers.Adam(lr=1e-5),
+              loss='binary_crossentropy',
+              metrics=['accuracy'])
+
+
+filepath= modelo_path
+checkpoint = ModelCheckpoint(filepath, monitor='val_acc', verbose=1, save_best_only=True, mode='max')
+
+history = model.fit_generator(train_generator,
+                              epochs=50,
+                              callbacks=[checkpoint], 
+                              steps_per_epoch = num_train // batch_size,
+                              validation_data = validation_generator,
+                              validation_steps = num_val // batch_size)
+                              
+                              
+acc = history.history['acc']
+val_acc = history.history['val_acc']
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+epochs = range(1, len(acc) + 1)
+plt.plot(epochs, acc, 'bo', label='Training acc')
+plt.plot(epochs, val_acc, 'r', label='Validation acc')
+plt.title('Training and validation accuracy')
+plt.legend()
+plt.figure()
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'r', label='Validation loss')
+plt.title('Training and validation loss')
+plt.legend()
+plt.show()
